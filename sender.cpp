@@ -22,6 +22,9 @@
 #include <iostream>               // For cout and cerr
 #include <cstdlib>                // For atoi()
 
+#define BUF_LEN 65540
+#define LCLPORT=12345
+
 using namespace std;
 
 #include "opencv2/opencv.hpp"
@@ -37,15 +40,22 @@ int main(int argc, char * argv[]) {
 
     string servAddress = argv[1]; // First arg: server address
     unsigned short servPort = Socket::resolveService(argv[2], "udp");
+    bool confirmed=false;
+    char buffer[BUF_LEN]; // Buffer
+    int recvMsgSize;
+    bool s1_ack=false;
+    clock_t start_t;
+    clock_t end_t;
+    bool ack=false;
 
     try {
-        UDPSocket sock;
+        UDPSocket sock(12345);
         int jpegqual =  ENCODE_QUALITY; // Compression Parameter
 
         Mat frame, send;
         vector < uchar > encoded;
         VideoCapture cap(0); // Grab the camera
-        namedWindow("send", CV_WINDOW_AUTOSIZE);
+        //namedWindow("send", CV_WINDOW_AUTOSIZE);
         if (!cap.isOpened()) {
             cerr << "OpenCV Failed to open camera";
             exit(1);
@@ -61,24 +71,63 @@ int main(int argc, char * argv[]) {
             compression_params.push_back(jpegqual);
 
             imencode(".jpg", send, encoded, compression_params);
-            imshow("send", send);
+            //imshow("send", send);
             int total_pack = 1 + (encoded.size() - 1) / PACK_SIZE;
+            
+            
+            // send state 1 (=99) + total number of packets to receiver
+            int ibuf[3];
+            ibuf[0]=9; ibuf[1]=9; ibuf[2] = total_pack;
+            sock.sendTo(ibuf, sizeof(int)*3, servAddress, servPort);
+            
+            //----- wait for confirmation from receiver (that state 1 & number of packets are received)
+            start_t=clock();
+            do {
+                //recvMsgSize = sock.recvFrom(buffer, BUF_LEN, sourceAddress, sourcePort);
+                recvMsgSize = sock.recv(buffer, BUF_LEN);
+                sock.sendTo(ibuf, sizeof(int)*3, servAddress, servPort);
+                cout << "total_pcakets..." << total_pack << endl;
 
-            int ibuf[1];
-            ibuf[0] = total_pack;
-            sock.sendTo(ibuf, sizeof(int), servAddress, servPort);
-
+            } while (recvMsgSize > sizeof(int) || ( ((int * ) buffer)[0] != total_pack));
+            
+            // Now state 2
+            // send image data to receiver
             for (int i = 0; i < total_pack; i++)
+            {
                 sock.sendTo( & encoded[i * PACK_SIZE], PACK_SIZE, servAddress, servPort);
+                start_t=clock();
+                // WAIT FOR CONFIRMATION
+                ack=true;
+                do {
+                    recvMsgSize = sock.recv(buffer, BUF_LEN);
+                    //cout <<endl << "receiver packet reception: " << recvMsgSize << endl;
+                    
+                    // break if it takes long time
+                    if (((clock() - start_t)/ (double) CLOCKS_PER_SEC)>2)
+                    {
+                        ack=false;
+                        cout << "going to break packets.." << endl;
+                        break;
+                    }
+                    //sock.sendTo( & encoded[i * PACK_SIZE], PACK_SIZE, servAddress, servPort);
+                    
+                } while (recvMsgSize > sizeof(int) || ( ((int * ) buffer)[0] != 999));
+                if (not ack)
+                    break;
+            }
+            
 
-            waitKey(FRAME_INTERVAL);
+            if (ack)
+            {
+                waitKey(FRAME_INTERVAL);
 
-            clock_t next_cycle = clock();
-            double duration = (next_cycle - last_cycle) / (double) CLOCKS_PER_SEC;
-            cout << "\teffective FPS:" << (1 / duration) << " \tkbps:" << (PACK_SIZE * total_pack / duration / 1024 * 8) << endl;
+                clock_t next_cycle = clock();
+                double duration = (next_cycle - last_cycle) / (double) CLOCKS_PER_SEC;
+                cout << endl << "\teffective FPS:" << (1 / duration) << " \tkbps:" << (PACK_SIZE * total_pack / duration / 1024 * 8) << endl;
 
-            cout << next_cycle - last_cycle;
-            last_cycle = next_cycle;
+                cout << next_cycle - last_cycle;
+                last_cycle = next_cycle;
+            }
         }
         // Destructor closes the socket
 

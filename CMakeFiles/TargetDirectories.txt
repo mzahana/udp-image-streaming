@@ -1,0 +1,2 @@
+/Users/abdkadma/Dropbox/ImgStreamUDP/udp-image-streaming/CMakeFiles/sender.dir
+/Users/abdkadma/Dropbox/ImgStreamUDP/udp-image-streaming/CMakeFiles/receiver.dir
